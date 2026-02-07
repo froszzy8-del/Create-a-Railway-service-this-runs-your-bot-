@@ -6,35 +6,45 @@ const HOME_ZIP = "94080";
 const MAX_MILES = 150;
 const CHECK_INTERVAL = 90 * 1000;
 
-// Product definitions
+// ================= PRODUCTS =================
 const PRODUCTS = [
-  { name: "Pokémon Booster Box", tags: ["booster box", "display"] },
-  { name: "Pokémon ETB", tags: ["elite trainer box", "etb"] },
-  { name: "Pokémon Bundle", tags: ["bundle", "collection"] },
-  { name: "One Piece Booster Box", tags: ["one piece", "booster box"] }
+  { game: "pokemon", name: "Pokémon Booster Box", tags: ["booster box", "display"], weight: 40 },
+  { game: "pokemon", name: "Pokémon ETB", tags: ["elite trainer box", "etb"], weight: 25 },
+  { game: "pokemon", name: "Pokémon Bundle", tags: ["bundle", "collection"], weight: 20 },
+  { game: "onepiece", name: "One Piece Booster Box", tags: ["one piece", "booster box"], weight: 45 }
 ];
 
-// Retail search targets
+// ================= STORES =================
 const STORES = [
   {
     name: "Target",
-    search: "https://www.target.com/s?searchTerm=pokemon+trading+cards"
+    url: "https://www.target.com/s?searchTerm=pokemon+trading+cards",
+    pickupSignals: ["Pick up today", "Ready for pickup", "Available nearby"],
+    score: 25
   },
   {
     name: "Walmart",
-    search: "https://www.walmart.com/search?q=pokemon+trading+cards"
-  },
-  {
-    name: "Barnes & Noble",
-    search: "https://www.barnesandnoble.com/s/pokemon%20trading%20cards"
-  },
-  {
-    name: "Costco",
-    search: "https://www.costco.com/CatalogSearch?keyword=pokemon"
+    url: "https://www.walmart.com/search?q=pokemon+trading+cards",
+    pickupSignals: ["Pickup today", "Available for pickup"],
+    score: 20
   },
   {
     name: "Best Buy",
-    search: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+trading+cards"
+    url: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+trading+cards",
+    pickupSignals: ["Pickup Today"],
+    score: 15
+  },
+  {
+    name: "Barnes & Noble",
+    url: "https://www.barnesandnoble.com/s/pokemon%20trading%20cards",
+    pickupSignals: ["Available for Pickup"],
+    score: 10
+  },
+  {
+    name: "Costco",
+    url: "https://www.costco.com/CatalogSearch?keyword=pokemon",
+    pickupSignals: [],
+    score: 8
   }
 ];
 
@@ -48,8 +58,8 @@ async function sendDiscord(title, desc, url) {
         title,
         description: desc,
         url,
-        color: 3447003,
-        footer: { text: "TCG Bot • Online + In-Store" },
+        color: 5793266,
+        footer: { text: "TCG Bot • Online + In-Store • ZIP 94080" },
         timestamp: new Date()
       }]
     })
@@ -68,21 +78,30 @@ async function ebayBoost(query) {
     const html = await (await fetch(url)).text();
     const sold = (html.match(/s-item__title/g) || []).length;
 
-    if (sold >= 20) return "\n📈 **High resale demand**";
-    if (sold >= 10) return "\n📊 Moderate resale demand";
-    return "";
+    if (sold >= 20) return 30;
+    if (sold >= 10) return 15;
+    return 5;
   } catch {
-    return "";
+    return 0;
   }
 }
 
-// ================= CHECKS =================
+// ================= CONFIDENCE ENGINE =================
+function confidenceScore(product, store, instore, ebayScore) {
+  let score = product.weight;
+  score += store.score;
+  score += ebayScore;
+  if (instore) score += 20;
+  return Math.min(95, score);
+}
+
+// ================= MAIN LOOP =================
 async function run() {
-  console.log("TCG scan running...");
+  console.log("Scanning retailers...");
 
   for (const store of STORES) {
     try {
-      const res = await fetch(store.search, {
+      const res = await fetch(store.url, {
         headers: { "User-Agent": "Mozilla/5.0" },
         timeout: 15000
       });
@@ -96,26 +115,24 @@ async function run() {
         html.includes("Add to Cart") ||
         html.includes("Ship it");
 
-      const instore =
-        html.includes("Pick up today") ||
-        html.includes("Available nearby") ||
-        html.includes("Ready for pickup");
+      const instore = store.pickupSignals.some(s => html.includes(s));
 
       if (!online && !instore) continue;
 
-      const boost = await ebayBoost(product.name);
+      const ebayScore = await ebayBoost(product.name);
+      const confidence = confidenceScore(product, store, instore, ebayScore);
 
       const title = instore
-        ? `🏬 In-Store — ${product.name}`
-        : `🔥 Online — ${product.name}`;
+        ? `🏬 IN-STORE — ${product.name}`
+        : `🔥 ONLINE — ${product.name}`;
 
       const body =
         `${store.name}\n` +
         (instore ? `📍 Near ZIP ${HOME_ZIP} (≤ ${MAX_MILES}mi)\n` : "") +
-        `🛒 Checkout link below\n` +
-        boost;
+        `🎯 Confidence: ${confidence}%\n` +
+        `🛒 Tap to checkout`;
 
-      await sendDiscord(title, body, store.search);
+      await sendDiscord(title, body, store.url);
     }
     catch {
       console.log(`${store.name} error ignored`);
