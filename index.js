@@ -4,22 +4,17 @@ import fetch from "node-fetch";
 const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK;
 const HOME_ZIP = "94080";
 const MAX_MILES = 150;
-const CHECK_INTERVAL = 90 * 1000; // 90 seconds
+const CHECK_INTERVAL = 90 * 1000;
 
-const PRODUCT_KEYWORDS = [
-  "pokemon",
-  "one piece",
-  "booster",
-  "elite trainer",
-  "etb",
-  "box",
-  "bundle",
-  "display",
-  "collection",
-  "tin"
+// Product definitions
+const PRODUCTS = [
+  { name: "Pokémon Booster Box", tags: ["booster box", "display"] },
+  { name: "Pokémon ETB", tags: ["elite trainer box", "etb"] },
+  { name: "Pokémon Bundle", tags: ["bundle", "collection"] },
+  { name: "One Piece Booster Box", tags: ["one piece", "booster box"] }
 ];
 
-// Store search URLs (safe)
+// Retail search targets
 const STORES = [
   {
     name: "Target",
@@ -40,18 +35,16 @@ const STORES = [
 ];
 
 // ================= HELPERS =================
-async function sendDiscord(title, description, url) {
-  if (!DISCORD_WEBHOOK) return;
-
+async function sendDiscord(title, desc, url) {
   await fetch(DISCORD_WEBHOOK, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       embeds: [{
         title,
-        description,
+        description: desc,
         url,
-        color: 5793266,
+        color: 3447003,
         footer: { text: "TCG Bot • Online + In-Store" },
         timestamp: new Date()
       }]
@@ -59,70 +52,71 @@ async function sendDiscord(title, description, url) {
   });
 }
 
-function matchProduct(html) {
-  const lower = html.toLowerCase();
-  return PRODUCT_KEYWORDS.some(k => lower.includes(k));
+function detectProduct(html) {
+  const text = html.toLowerCase();
+  return PRODUCTS.find(p => p.tags.some(t => text.includes(t)));
 }
 
-// ================= ONLINE CHECK =================
-async function checkOnline() {
-  for (const store of STORES) {
-    try {
-      const res = await fetch(store.search, {
-        headers: { "User-Agent": "Mozilla/5.0" },
-        timeout: 15000
-      });
+// ================= EBAY DEMAND =================
+async function ebayBoost(query) {
+  try {
+    const url = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(query)}&LH_Sold=1`;
+    const html = await (await fetch(url)).text();
+    const sold = (html.match(/s-item__title/g) || []).length;
 
-      const html = await res.text();
-
-      if (matchProduct(html) && html.includes("Add to cart")) {
-        await sendDiscord(
-          `🔥 Online Stock — ${store.name}`,
-          `Possible Pokémon / One Piece product available.\nManual checkout recommended.`,
-          store.search
-        );
-      }
-    } catch {
-      console.log(`${store.name} online check failed (ignored)`);
-    }
+    if (sold >= 20) return "\n📈 **High resale demand**";
+    if (sold >= 10) return "\n📊 Moderate resale demand";
+    return "";
+  } catch {
+    return "";
   }
 }
 
-// ================= IN-STORE CHECK =================
-async function checkInStore() {
-  // Lightweight signal — we alert based on availability phrases
-  for (const store of STORES) {
-    try {
-      const res = await fetch(store.search, {
-        headers: { "User-Agent": "Mozilla/5.0" },
-        timeout: 15000
-      });
-
-      const html = await res.text();
-
-      if (
-        matchProduct(html) &&
-        (html.includes("Pick up today") ||
-         html.includes("In stock at") ||
-         html.includes("Available nearby"))
-      ) {
-        await sendDiscord(
-          `🏬 In-Store Signal — ${store.name}`,
-          `Possible local availability near ZIP ${HOME_ZIP} (≤ ${MAX_MILES}mi).\nTap to check store stock.`,
-          store.search
-        );
-      }
-    } catch {
-      console.log(`${store.name} in-store check failed (ignored)`);
-    }
-  }
-}
-
-// ================= LOOP =================
+// ================= CHECKS =================
 async function run() {
-  console.log("TCG bot running...");
-  await checkOnline();
-  await checkInStore();
+  console.log("TCG scan running...");
+
+  for (const store of STORES) {
+    try {
+      const res = await fetch(store.search, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        timeout: 15000
+      });
+
+      const html = await res.text();
+      const product = detectProduct(html);
+      if (!product) continue;
+
+      const online =
+        html.includes("Add to cart") ||
+        html.includes("Add to Cart") ||
+        html.includes("Ship it");
+
+      const instore =
+        html.includes("Pick up today") ||
+        html.includes("Available nearby") ||
+        html.includes("In stock at");
+
+      if (!online && !instore) continue;
+
+      const boost = await ebayBoost(product.name);
+
+      const title = instore
+        ? `🏬 In-Store — ${product.name}`
+        : `🔥 Online — ${product.name}`;
+
+      const body =
+        `${store.name}\n` +
+        (instore ? `📍 Near ZIP ${HOME_ZIP} (≤ ${MAX_MILES}mi)\n` : "") +
+        `🛒 Checkout link below\n` +
+        boost;
+
+      await sendDiscord(title, body, store.search);
+    }
+    catch {
+      console.log(`${store.name} error ignored`);
+    }
+  }
 }
 
 run();
