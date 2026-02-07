@@ -31,6 +31,10 @@ const STORES = [
   {
     name: "Costco",
     search: "https://www.costco.com/CatalogSearch?keyword=pokemon"
+  },
+  {
+    name: "Best Buy",
+    search: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+trading+cards"
   }
 ];
 
@@ -95,7 +99,7 @@ async function run() {
       const instore =
         html.includes("Pick up today") ||
         html.includes("Available nearby") ||
-        html.includes("In stock at");
+        html.includes("Ready for pickup");
 
       if (!online && !instore) continue;
 
