@@ -5,13 +5,17 @@ const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK;
 const HOME_ZIP = "94080";
 const MAX_MILES = 150;
 const CHECK_INTERVAL = 90 * 1000;
+const COOLDOWN_MINUTES = 30;
+
+// ================= COOLDOWN MEMORY =================
+const cooldownMap = new Map();
 
 // ================= PRODUCTS =================
 const PRODUCTS = [
-  { game: "pokemon", name: "Pokémon Booster Box", tags: ["booster box", "display"], weight: 40 },
-  { game: "pokemon", name: "Pokémon ETB", tags: ["elite trainer box", "etb"], weight: 25 },
+  { game: "pokemon", name: "Pokémon Booster Box", tags: ["booster box", "display"], weight: 45 },
+  { game: "pokemon", name: "Pokémon ETB", tags: ["elite trainer box", "etb"], weight: 30 },
   { game: "pokemon", name: "Pokémon Bundle", tags: ["bundle", "collection"], weight: 20 },
-  { game: "onepiece", name: "One Piece Booster Box", tags: ["one piece", "booster box"], weight: 45 }
+  { game: "onepiece", name: "One Piece Booster Box", tags: ["one piece", "booster box"], weight: 50 }
 ];
 
 // ================= STORES =================
@@ -19,36 +23,60 @@ const STORES = [
   {
     name: "Target",
     url: "https://www.target.com/s?searchTerm=pokemon+trading+cards",
-    pickupSignals: ["Pick up today", "Ready for pickup", "Available nearby"],
-    score: 25
+    checkout: "https://www.target.com/s?searchTerm=pokemon+trading+cards",
+    pickupSignals: ["Pick up today", "Ready for pickup"],
+    maxQty: 5,
+    score: 30
   },
   {
     name: "Walmart",
     url: "https://www.walmart.com/search?q=pokemon+trading+cards",
-    pickupSignals: ["Pickup today", "Available for pickup"],
-    score: 20
+    checkout: "https://www.walmart.com/search?q=pokemon+trading+cards",
+    pickupSignals: ["Pickup today"],
+    maxQty: 12,
+    score: 25
   },
   {
     name: "Best Buy",
     url: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+trading+cards",
+    checkout: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+trading+cards",
     pickupSignals: ["Pickup Today"],
+    maxQty: 2,
     score: 15
   },
   {
     name: "Barnes & Noble",
     url: "https://www.barnesandnoble.com/s/pokemon%20trading%20cards",
+    checkout: "https://www.barnesandnoble.com/s/pokemon%20trading%20cards",
     pickupSignals: ["Available for Pickup"],
+    maxQty: 2,
     score: 10
   },
   {
     name: "Costco",
     url: "https://www.costco.com/CatalogSearch?keyword=pokemon",
+    checkout: "https://www.costco.com/CatalogSearch?keyword=pokemon",
     pickupSignals: [],
+    maxQty: 1,
     score: 8
   }
 ];
 
 // ================= HELPERS =================
+function cooldownKey(product, store) {
+  return `${product.name}_${store.name}`;
+}
+
+function isCoolingDown(key) {
+  const last = cooldownMap.get(key);
+  if (!last) return false;
+  return (Date.now() - last) < COOLDOWN_MINUTES * 60 * 1000;
+}
+
+function setCooldown(key) {
+  cooldownMap.set(key, Date.now());
+}
+
 async function sendDiscord(title, desc, url) {
   await fetch(DISCORD_WEBHOOK, {
     method: "POST",
@@ -58,8 +86,8 @@ async function sendDiscord(title, desc, url) {
         title,
         description: desc,
         url,
-        color: 5793266,
-        footer: { text: "TCG Bot • Online + In-Store • ZIP 94080" },
+        color: 5763719,
+        footer: { text: "TCG Bot • Online + In-Store • Cooldown Active" },
         timestamp: new Date()
       }]
     })
@@ -86,18 +114,16 @@ async function ebayBoost(query) {
   }
 }
 
-// ================= CONFIDENCE ENGINE =================
-function confidenceScore(product, store, instore, ebayScore) {
-  let score = product.weight;
-  score += store.score;
-  score += ebayScore;
+// ================= CONFIDENCE =================
+function confidence(product, store, instore, ebay) {
+  let score = product.weight + store.score + ebay;
   if (instore) score += 20;
   return Math.min(95, score);
 }
 
 // ================= MAIN LOOP =================
 async function run() {
-  console.log("Scanning retailers...");
+  console.log("Scanning stores…");
 
   for (const store of STORES) {
     try {
@@ -110,17 +136,19 @@ async function run() {
       const product = detectProduct(html);
       if (!product) continue;
 
+      const key = cooldownKey(product, store);
+      if (isCoolingDown(key)) continue;
+
       const online =
         html.includes("Add to cart") ||
         html.includes("Add to Cart") ||
         html.includes("Ship it");
 
       const instore = store.pickupSignals.some(s => html.includes(s));
-
       if (!online && !instore) continue;
 
-      const ebayScore = await ebayBoost(product.name);
-      const confidence = confidenceScore(product, store, instore, ebayScore);
+      const ebay = await ebayBoost(product.name);
+      const conf = confidence(product, store, instore, ebay);
 
       const title = instore
         ? `🏬 IN-STORE — ${product.name}`
@@ -129,10 +157,12 @@ async function run() {
       const body =
         `${store.name}\n` +
         (instore ? `📍 Near ZIP ${HOME_ZIP} (≤ ${MAX_MILES}mi)\n` : "") +
-        `🎯 Confidence: ${confidence}%\n` +
-        `🛒 Tap to checkout`;
+        `🛒 Max Qty: ${store.maxQty}\n` +
+        `🎯 Confidence: ${conf}%\n` +
+        `⚡ Checkout fast`;
 
-      await sendDiscord(title, body, store.url);
+      await sendDiscord(title, body, store.checkout);
+      setCooldown(key);
     }
     catch {
       console.log(`${store.name} error ignored`);
