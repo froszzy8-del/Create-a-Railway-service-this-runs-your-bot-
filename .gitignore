@@ -1,0 +1,4 @@
+node_modules/
+.env
+pokemon_state.json
+pokemon-state.json
