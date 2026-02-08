@@ -67,12 +67,23 @@ const STORES = [
 
 /* ================= LINKS ================= */
 const CHECKOUT_LINKS = {
-  Target: q => `https://www.target.com/s?searchTerm=${encodeURIComponent(q)}`,
-  Walmart: q => `https://www.walmart.com/search?q=${encodeURIComponent(q)}`,
-  BestBuy: q => `https://www.bestbuy.com/site/searchpage.jsp?st=${encodeURIComponent(q)}`,
-  "Barnes & Noble": q => `https://www.barnesandnoble.com/s/${encodeURIComponent(q)}`,
-  Costco: q => `https://www.costco.com/CatalogSearch?keyword=${encodeURIComponent(q)}`,
-  "Pokémon Center": q => `https://www.pokemoncenter.com/search/${encodeURIComponent(q)}`
+  Target: q =>
+    `https://www.target.com/s?searchTerm=${encodeURIComponent(q)}`,
+
+  Walmart: q =>
+    `https://www.walmart.com/search?q=${encodeURIComponent(q)}`,
+
+  BestBuy: q =>
+    `https://www.bestbuy.com/site/searchpage.jsp?st=${encodeURIComponent(q)}&pickupStoreShippingZip=${HOME_ZIP}`,
+
+  "Barnes & Noble": q =>
+    `https://www.barnesandnoble.com/s/${encodeURIComponent(q)}`,
+
+  Costco: q =>
+    `https://www.costco.com/CatalogSearch?keyword=${encodeURIComponent(q)}`,
+
+  "Pokémon Center": q =>
+    `https://www.pokemoncenter.com/search/${encodeURIComponent(q)}`
 };
 
 /* ================= NEWS ================= */
@@ -104,6 +115,25 @@ function isCooling(key) {
 
 function setCooling(key) {
   cooldown.set(key, Date.now());
+}
+
+/* ================= BEST BUY ZIP ACCURACY ================= */
+function bestBuyInStoreAccurate(html) {
+  return /ready for pickup/i.test(html) && /store pickup/i.test(html);
+}
+
+/* ================= CONFIDENCE SCORING ================= */
+function leakConfidence({ news, ebay, instore, weight, storeScore }) {
+  let score = 0;
+
+  if (news) score += 25;
+  if (instore) score += 25;
+  if (ebay >= 20) score += 25;
+
+  score += weight;
+  score += storeScore;
+
+  return Math.min(95, score);
 }
 
 /* ================= DISCORD SENDER ================= */
@@ -143,18 +173,6 @@ async function ebayBoost(query) {
     return 5;
   } catch {
     return 0;
-  }
-}
-
-/* ================= MSRP LEARN ================= */
-async function learnMSRP(product) {
-  try {
-    const url = `https://www.pokemoncenter.com/search/${encodeURIComponent(product)}`;
-    const html = await (await fetch(url)).text();
-    const match = html.match(/\$([0-9]+\.[0-9]{2})/);
-    return match ? parseFloat(match[1]) : null;
-  } catch {
-    return null;
   }
 }
 
@@ -207,11 +225,21 @@ async function run() {
       if (isCooling(key)) continue;
 
       const online = /add to cart|ship it/i.test(html);
-      const instore = store.pickupSignals.some(s => html.includes(s));
+      const instore =
+        store.name === "Best Buy"
+          ? bestBuyInStoreAccurate(html)
+          : store.pickupSignals.some(s => html.includes(s));
+
       if (!online && !instore) continue;
 
       const ebay = await ebayBoost(product.name);
-      const confidence = Math.min(95, product.weight + store.score + ebay + (instore ? 20 : 0));
+      const confidence = leakConfidence({
+        news: upcoming.size > 0,
+        ebay,
+        instore,
+        weight: product.weight,
+        storeScore: store.score
+      });
 
       await sendDiscord(
         instore ? `🏬 IN-STORE — ${product.name}` : `🔥 ONLINE — ${product.name}`,
