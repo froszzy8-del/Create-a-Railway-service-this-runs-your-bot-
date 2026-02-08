@@ -32,75 +32,46 @@ const STORES = [
     name: "Target",
     url: "https://www.target.com/s?searchTerm=pokemon+trading+cards",
     pickupSignals: ["Pick up today", "Ready for pickup"],
-    maxQty: 5,
     score: 30
   },
   {
     name: "Walmart",
     url: "https://www.walmart.com/search?q=pokemon+trading+cards",
     pickupSignals: ["Pickup today"],
-    maxQty: 12,
     score: 25
   },
   {
     name: "Best Buy",
     url: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+trading+cards",
     pickupSignals: ["Pickup Today"],
-    maxQty: 2,
     score: 15
   },
   {
     name: "Barnes & Noble",
     url: "https://www.barnesandnoble.com/s/pokemon%20trading%20cards",
     pickupSignals: ["Available for Pickup"],
-    maxQty: 2,
     score: 10
   },
   {
     name: "Costco",
     url: "https://www.costco.com/CatalogSearch?keyword=pokemon",
     pickupSignals: [],
-    maxQty: 1,
     score: 8
   }
 ];
 
 /* ================= LINKS ================= */
 const CHECKOUT_LINKS = {
-  Target: q =>
-    `https://www.target.com/s?searchTerm=${encodeURIComponent(q)}`,
-
-  Walmart: q =>
-    `https://www.walmart.com/search?q=${encodeURIComponent(q)}`,
-
+  Target: q => `https://www.target.com/s?searchTerm=${encodeURIComponent(q)}`,
+  Walmart: q => `https://www.walmart.com/search?q=${encodeURIComponent(q)}`,
   BestBuy: q =>
     `https://www.bestbuy.com/site/searchpage.jsp?st=${encodeURIComponent(q)}&pickupStoreShippingZip=${HOME_ZIP}`,
-
-  "Barnes & Noble": q =>
-    `https://www.barnesandnoble.com/s/${encodeURIComponent(q)}`,
-
-  Costco: q =>
-    `https://www.costco.com/CatalogSearch?keyword=${encodeURIComponent(q)}`,
-
-  "Pokémon Center": q =>
-    `https://www.pokemoncenter.com/search/${encodeURIComponent(q)}`
+  "Barnes & Noble": q => `https://www.barnesandnoble.com/s/${encodeURIComponent(q)}`,
+  Costco: q => `https://www.costco.com/CatalogSearch?keyword=${encodeURIComponent(q)}`
 };
-
-/* ================= NEWS ================= */
-const NEWS_SOURCES = [
-  { game: "Pokémon", url: "https://www.pokemon.com/us/pokemon-news" },
-  { game: "One Piece", url: "https://en.onepiece-cardgame.com/information" }
-];
-
-/* ================= RELEASES ================= */
-const RELEASES = [
-  { game: "Pokémon", product: "Scarlet & Violet Booster Box", date: "2026-03-22T07:00:00Z" },
-  { game: "One Piece", product: "OP-10 Booster Box", date: "2026-04-05T07:00:00Z" }
-];
 
 /* ================= MEMORY ================= */
 const cooldown = new Map();
-const upcoming = new Set();
 
 /* ================= HELPERS ================= */
 function detectProduct(html) {
@@ -122,34 +93,51 @@ function bestBuyInStoreAccurate(html) {
   return /ready for pickup/i.test(html) && /store pickup/i.test(html);
 }
 
-/* ================= CONFIDENCE SCORING ================= */
-function leakConfidence({ news, ebay, instore, weight, storeScore }) {
-  let score = 0;
-
-  if (news) score += 25;
+/* ================= CONFIDENCE ================= */
+function leakConfidence({ ebay, instore, weight, storeScore }) {
+  let score = weight + storeScore + ebay;
   if (instore) score += 25;
-  if (ebay >= 20) score += 25;
-
-  score += weight;
-  score += storeScore;
-
   return Math.min(95, score);
 }
 
+/* ================= DISCORD BUTTONS ================= */
+function checkoutButtons(store, product) {
+  return [
+    {
+      type: 2,
+      style: 5,
+      label: "🛒 Checkout Now",
+      url: CHECKOUT_LINKS[store]?.(product)
+    },
+    {
+      type: 2,
+      style: 5,
+      label: "🏬 Store Page",
+      url: STORES.find(s => s.name === store)?.url
+    },
+    {
+      type: 2,
+      style: 5,
+      label: "🔍 Backup Search",
+      url: `https://www.google.com/search?q=${encodeURIComponent(product + " " + store)}`
+    }
+  ].filter(b => b.url);
+}
+
 /* ================= DISCORD SENDER ================= */
-async function sendDiscord(titleOrMessage, desc, url) {
-  const payload = desc
-    ? {
-        embeds: [{
-          title: titleOrMessage,
-          description: desc,
-          url,
-          color: 5793266,
-          footer: { text: "TCG Bot • MSRP Guard • Railway" },
-          timestamp: new Date()
-        }]
-      }
-    : { content: titleOrMessage };
+async function sendDiscord(title, desc, buttons = []) {
+  const payload = {
+    embeds: [{
+      title,
+      description: desc,
+      color: 5793266,
+      footer: { text: "TCG Bot • Railway" },
+      timestamp: new Date()
+    }],
+    components: buttons.length
+      ? [{ type: 1, components: buttons }]
+      : []
+  };
 
   try {
     await fetch(WEBHOOK, {
@@ -165,8 +153,10 @@ async function sendDiscord(titleOrMessage, desc, url) {
 /* ================= EBAY DEMAND ================= */
 async function ebayBoost(query) {
   try {
-    const url = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(query)}&LH_Sold=1`;
-    const html = await (await fetch(url)).text();
+    const html = await (await fetch(
+      `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(query)}&LH_Sold=1`
+    )).text();
+
     const sold = (html.match(/s-item__title/g) || []).length;
     if (sold >= 20) return 30;
     if (sold >= 10) return 15;
@@ -176,44 +166,9 @@ async function ebayBoost(query) {
   }
 }
 
-/* ================= NEWS ================= */
-async function scanNews() {
-  for (const src of NEWS_SOURCES) {
-    try {
-      const html = await (await fetch(src.url)).text();
-      const hits = html.match(/(Booster Box|Elite Trainer Box|Starter Deck|Collection)/gi) || [];
-      hits.forEach(h => {
-        const key = `${src.game}-${h}`;
-        if (!upcoming.has(key)) {
-          upcoming.add(key);
-          sendDiscord(`Upcoming ${src.game} Release`, `Mentioned: **${h}**`, src.url);
-        }
-      });
-    } catch {}
-  }
-}
-
-/* ================= COUNTDOWN ================= */
-async function releaseCountdown() {
-  const now = Date.now();
-  for (const r of RELEASES) {
-    const hours = Math.floor((new Date(r.date) - now) / 3600000);
-    if ([168, 72, 24, 1].includes(hours)) {
-      sendDiscord(
-        `Release Countdown — ${r.game}`,
-        `${r.product}\nReleases in ${hours} hours`,
-        "https://www.pokemoncenter.com"
-      );
-    }
-  }
-}
-
 /* ================= MAIN ================= */
 async function run() {
   console.log("TCG bot scanning…");
-
-  await scanNews();
-  await releaseCountdown();
 
   for (const store of STORES) {
     try {
@@ -234,7 +189,6 @@ async function run() {
 
       const ebay = await ebayBoost(product.name);
       const confidence = leakConfidence({
-        news: upcoming.size > 0,
         ebay,
         instore,
         weight: product.weight,
@@ -243,8 +197,8 @@ async function run() {
 
       await sendDiscord(
         instore ? `🏬 IN-STORE — ${product.name}` : `🔥 ONLINE — ${product.name}`,
-        `${store.name}\nConfidence: ${confidence}%\nCheckout immediately`,
-        CHECKOUT_LINKS[store.name]?.(product.name) || store.url
+        `**Store:** ${store.name}\n**Confidence:** ${confidence}%`,
+        checkoutButtons(store.name, product.name)
       );
 
       setCooling(key);
@@ -255,7 +209,6 @@ async function run() {
 }
 
 /* ================= STARTUP ================= */
-sendDiscord("🟢 Pokémon TCG bot online (Railway ready)");
+sendDiscord("🟢 Pokémon TCG bot online");
 run();
 setInterval(run, CHECK_INTERVAL);
-setInterval(() => console.log("Bot heartbeat"), 60000);
