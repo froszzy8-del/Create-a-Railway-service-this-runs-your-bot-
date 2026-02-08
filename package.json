@@ -2,12 +2,12 @@
   "name": "tcg-bot",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
+    "dotenv": "^17.2.4",
     "node-fetch": "^3.3.2"
   }
 }
+
