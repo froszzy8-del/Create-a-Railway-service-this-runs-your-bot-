@@ -12,7 +12,6 @@ if (!WEBHOOK) {
 
 /* ================= LOCATION ================= */
 const HOME_ZIP = "94080";
-const MAX_MILES = 150;
 
 /* ================= TIMING ================= */
 const CHECK_INTERVAL = 5 * 60 * 1000;
@@ -32,42 +31,53 @@ const STORES = [
     name: "Target",
     url: "https://www.target.com/s?searchTerm=pokemon+trading+cards",
     pickupSignals: ["Pick up today", "Ready for pickup"],
-    score: 30
+    score: 30,
+    maxQty: 5
   },
   {
     name: "Walmart",
     url: "https://www.walmart.com/search?q=pokemon+trading+cards",
     pickupSignals: ["Pickup today"],
-    score: 25
+    score: 25,
+    maxQty: 12
   },
   {
     name: "Best Buy",
     url: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+trading+cards",
     pickupSignals: ["Pickup Today"],
-    score: 15
+    score: 15,
+    maxQty: 2
   },
   {
     name: "Barnes & Noble",
     url: "https://www.barnesandnoble.com/s/pokemon%20trading%20cards",
     pickupSignals: ["Available for Pickup"],
-    score: 10
+    score: 10,
+    maxQty: 2
   },
   {
     name: "Costco",
     url: "https://www.costco.com/CatalogSearch?keyword=pokemon",
     pickupSignals: [],
-    score: 8
+    score: 8,
+    maxQty: 1
   }
 ];
 
-/* ================= LINKS ================= */
-const CHECKOUT_LINKS = {
-  Target: q => `https://www.target.com/s?searchTerm=${encodeURIComponent(q)}`,
-  Walmart: q => `https://www.walmart.com/search?q=${encodeURIComponent(q)}`,
-  BestBuy: q =>
-    `https://www.bestbuy.com/site/searchpage.jsp?st=${encodeURIComponent(q)}&pickupStoreShippingZip=${HOME_ZIP}`,
-  "Barnes & Noble": q => `https://www.barnesandnoble.com/s/${encodeURIComponent(q)}`,
-  Costco: q => `https://www.costco.com/CatalogSearch?keyword=${encodeURIComponent(q)}`
+/* ================= PRODUCT LINKS ================= */
+const PRODUCT_LINKS = {
+  "Pokémon Booster Box": {
+    Target: "https://www.target.com/s?searchTerm=pokemon+booster+box",
+    Walmart: "https://www.walmart.com/search?q=pokemon+booster+box",
+    BestBuy: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+booster+box",
+    "Barnes & Noble": "https://www.barnesandnoble.com/s/pokemon+booster+box"
+  },
+  "Pokémon ETB": {
+    Target: "https://www.target.com/s?searchTerm=pokemon+elite+trainer+box",
+    Walmart: "https://www.walmart.com/search?q=pokemon+elite+trainer+box",
+    BestBuy: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+elite+trainer+box",
+    "Barnes & Noble": "https://www.barnesandnoble.com/s/pokemon+elite+trainer+box"
+  }
 };
 
 /* ================= MEMORY ================= */
@@ -100,26 +110,41 @@ function leakConfidence({ ebay, instore, weight, storeScore }) {
   return Math.min(95, score);
 }
 
+/* ================= CART INTENT ================= */
+function cartIntentLink(store, productName) {
+  const base =
+    PRODUCT_LINKS[productName]?.[store] ||
+    STORES.find(s => s.name === store)?.url;
+
+  if (!base) return null;
+
+  if (store === "Best Buy") {
+    return `${base}&pickupStoreShippingZip=${HOME_ZIP}`;
+  }
+
+  return base;
+}
+
 /* ================= DISCORD BUTTONS ================= */
-function checkoutButtons(store, product) {
+function checkoutButtons(store, productName, maxQty) {
   return [
     {
       type: 2,
       style: 5,
-      label: "🛒 Checkout Now",
-      url: CHECKOUT_LINKS[store]?.(product)
+      label: `🛒 Checkout (x${maxQty})`,
+      url: cartIntentLink(store, productName)
     },
     {
       type: 2,
       style: 5,
-      label: "🏬 Store Page",
-      url: STORES.find(s => s.name === store)?.url
+      label: "📦 Product Page",
+      url: PRODUCT_LINKS[productName]?.[store]
     },
     {
       type: 2,
       style: 5,
       label: "🔍 Backup Search",
-      url: `https://www.google.com/search?q=${encodeURIComponent(product + " " + store)}`
+      url: `https://www.google.com/search?q=${encodeURIComponent(productName + " " + store)}`
     }
   ].filter(b => b.url);
 }
@@ -139,15 +164,11 @@ async function sendDiscord(title, desc, buttons = []) {
       : []
   };
 
-  try {
-    await fetch(WEBHOOK, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-  } catch (err) {
-    console.error("Discord error:", err.message);
-  }
+  await fetch(WEBHOOK, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
 }
 
 /* ================= EBAY DEMAND ================= */
@@ -198,7 +219,7 @@ async function run() {
       await sendDiscord(
         instore ? `🏬 IN-STORE — ${product.name}` : `🔥 ONLINE — ${product.name}`,
         `**Store:** ${store.name}\n**Confidence:** ${confidence}%`,
-        checkoutButtons(store.name, product.name)
+        checkoutButtons(store.name, product.name, store.maxQty)
       );
 
       setCooling(key);
