@@ -64,22 +64,6 @@ const STORES = [
   }
 ];
 
-/* ================= PRODUCT LINKS ================= */
-const PRODUCT_LINKS = {
-  "Pokémon Booster Box": {
-    Target: "https://www.target.com/s?searchTerm=pokemon+booster+box",
-    Walmart: "https://www.walmart.com/search?q=pokemon+booster+box",
-    BestBuy: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+booster+box",
-    "Barnes & Noble": "https://www.barnesandnoble.com/s/pokemon+booster+box"
-  },
-  "Pokémon ETB": {
-    Target: "https://www.target.com/s?searchTerm=pokemon+elite+trainer+box",
-    Walmart: "https://www.walmart.com/search?q=pokemon+elite+trainer+box",
-    BestBuy: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+elite+trainer+box",
-    "Barnes & Noble": "https://www.barnesandnoble.com/s/pokemon+elite+trainer+box"
-  }
-};
-
 /* ================= MEMORY ================= */
 const cooldown = new Map();
 
@@ -98,6 +82,32 @@ function setCooling(key) {
   cooldown.set(key, Date.now());
 }
 
+/* ================= SKU SNIFFING ================= */
+function extractTargetTCIN(html) {
+  const match = html.match(/"tcin":"(\d{8})"/);
+  return match ? match[1] : null;
+}
+
+function extractWalmartOfferId(html) {
+  const match = html.match(/"offerId":"([a-zA-Z0-9]+)"/);
+  return match ? match[1] : null;
+}
+
+/* ================= STORE-SPECIFIC LINKS ================= */
+function buildTargetLinks(tcin, qty) {
+  return {
+    product: `https://www.target.com/p/-/A-${tcin}`,
+    cart: `https://www.target.com/co-cart?preselect=${tcin}&quantity=${qty}`
+  };
+}
+
+function buildWalmartLinks(offerId, qty) {
+  return {
+    product: `https://www.walmart.com/ip/${offerId}`,
+    cart: `https://www.walmart.com/cart?items=${offerId}:${qty}`
+  };
+}
+
 /* ================= BEST BUY ZIP ACCURACY ================= */
 function bestBuyInStoreAccurate(html) {
   return /ready for pickup/i.test(html) && /store pickup/i.test(html);
@@ -111,42 +121,48 @@ function leakConfidence({ ebay, instore, weight, storeScore }) {
 }
 
 /* ================= CART INTENT ================= */
-function cartIntentLink(store, productName) {
-  const base =
-    PRODUCT_LINKS[productName]?.[store] ||
-    STORES.find(s => s.name === store)?.url;
-
-  if (!base) return null;
-
-  if (store === "Best Buy") {
-    return `${base}&pickupStoreShippingZip=${HOME_ZIP}`;
+function cartIntentLink(store, productName, html, maxQty) {
+  if (store === "Target") {
+    const tcin = extractTargetTCIN(html);
+    if (tcin) return buildTargetLinks(tcin, maxQty).cart;
   }
 
-  return base;
+  if (store === "Walmart") {
+    const offerId = extractWalmartOfferId(html);
+    if (offerId) return buildWalmartLinks(offerId, maxQty).cart;
+  }
+
+  if (store === "Best Buy") {
+    return `https://www.bestbuy.com/site/searchpage.jsp?st=${encodeURIComponent(productName)}&pickupStoreShippingZip=${HOME_ZIP}`;
+  }
+
+  return STORES.find(s => s.name === store)?.url || null;
 }
 
 /* ================= DISCORD BUTTONS ================= */
-function checkoutButtons(store, productName, maxQty) {
+function checkoutButtons(store, productName, html, maxQty) {
+  const cart = cartIntentLink(store, productName, html, maxQty);
+
   return [
-    {
+    cart && {
       type: 2,
       style: 5,
       label: `🛒 Checkout (x${maxQty})`,
-      url: cartIntentLink(store, productName)
+      url: cart
     },
     {
       type: 2,
       style: 5,
-      label: "📦 Product Page",
-      url: PRODUCT_LINKS[productName]?.[store]
+      label: "🔍 Store Page",
+      url: STORES.find(s => s.name === store)?.url
     },
     {
       type: 2,
       style: 5,
-      label: "🔍 Backup Search",
+      label: "🔎 Backup Search",
       url: `https://www.google.com/search?q=${encodeURIComponent(productName + " " + store)}`
     }
-  ].filter(b => b.url);
+  ].filter(Boolean);
 }
 
 /* ================= DISCORD SENDER ================= */
@@ -159,9 +175,7 @@ async function sendDiscord(title, desc, buttons = []) {
       footer: { text: "TCG Bot • Railway" },
       timestamp: new Date()
     }],
-    components: buttons.length
-      ? [{ type: 1, components: buttons }]
-      : []
+    components: buttons.length ? [{ type: 1, components: buttons }] : []
   };
 
   await fetch(WEBHOOK, {
@@ -219,7 +233,7 @@ async function run() {
       await sendDiscord(
         instore ? `🏬 IN-STORE — ${product.name}` : `🔥 ONLINE — ${product.name}`,
         `**Store:** ${store.name}\n**Confidence:** ${confidence}%`,
-        checkoutButtons(store.name, product.name, store.maxQty)
+        checkoutButtons(store.name, product.name, html, store.maxQty)
       );
 
       setCooling(key);
