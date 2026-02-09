@@ -25,13 +25,17 @@ const PRODUCTS = [
   { game: "onepiece", name: "One Piece Booster Box", tags: ["one piece", "booster box"], weight: 50 }
 ];
 
-/* ================= MSRP ================= */
+/* ================= MSRP (FALLBACK) ================= */
 const MSRP = {
   "Pokémon Booster Box": 161.64,
   "Pokémon ETB": 49.99,
   "Pokémon Collection": 29.99,
   "One Piece Booster Box": 107.76
 };
+
+/* ================= AUTO-LEARNED MSRP ================= */
+const learnedMSRP = {};
+const POKEMON_CENTER_SEARCH = "https://www.pokemoncenter.com/search/";
 
 /* ================= STORES ================= */
 const STORES = [
@@ -58,6 +62,30 @@ function isCooling(key) {
 
 function setCooling(key) {
   cooldown.set(key, Date.now());
+}
+
+/* ================= MSRP AUTO-LEARNING ================= */
+async function learnPokemonCenterMSRP(productName) {
+  try {
+    if (learnedMSRP[productName]) return;
+
+    const html = await (await fetch(
+      `${POKEMON_CENTER_SEARCH}${encodeURIComponent(productName)}`
+    )).text();
+
+    const priceMatch = html.match(/\$([0-9]+\.[0-9]{2})/);
+    if (!priceMatch) return;
+
+    learnedMSRP[productName] = parseFloat(priceMatch[1]);
+
+    await sendDiscord(
+      "🧠 Pokémon Center MSRP Learned",
+      `**${productName}**
+MSRP: $${learnedMSRP[productName]}
+Source: Pokémon Center`,
+      `https://www.pokemoncenter.com/search/${encodeURIComponent(productName)}`
+    );
+  } catch {}
 }
 
 /* ================= PRICE EXTRACTION ================= */
@@ -91,14 +119,12 @@ function extractWalmartOfferId(html) {
 /* ================= STORE LINKS ================= */
 function buildTargetLinks(tcin, qty) {
   return {
-    product: `https://www.target.com/p/-/A-${tcin}`,
     cart: `https://www.target.com/co-cart?preselect=${tcin}&quantity=${qty}`
   };
 }
 
 function buildWalmartLinks(offerId, qty) {
   return {
-    product: `https://www.walmart.com/ip/${offerId}`,
     cart: `https://www.walmart.com/cart?items=${offerId}:${qty}`
   };
 }
@@ -134,18 +160,7 @@ function cartIntentLink(store, productName, html, maxQty) {
   return STORES.find(s => s.name === store)?.url || null;
 }
 
-/* ================= DISCORD BUTTONS ================= */
-function checkoutButtons(store, productName, html, maxQty) {
-  const cart = cartIntentLink(store, productName, html, maxQty);
-
-  return [
-    cart && { type: 2, style: 5, label: `🛒 Checkout (x${maxQty})`, url: cart },
-    { type: 2, style: 5, label: "🔍 Store Page", url: STORES.find(s => s.name === store)?.url },
-    { type: 2, style: 5, label: "🔎 Backup Search", url: `https://www.google.com/search?q=${encodeURIComponent(productName + " " + store)}` }
-  ].filter(Boolean);
-}
-
-/* ================= DISCORD SENDER ================= */
+/* ================= DISCORD ================= */
 async function sendDiscord(title, desc, buttons = []) {
   const payload = {
     embeds: [{
@@ -165,10 +180,13 @@ async function sendDiscord(title, desc, buttons = []) {
   });
 }
 
-/* ================= EBAY DEMAND ================= */
+/* ================= EBAY ================= */
 async function ebayBoost(query) {
   try {
-    const html = await (await fetch(`https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(query)}&LH_Sold=1`)).text();
+    const html = await (await fetch(
+      `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(query)}&LH_Sold=1`
+    )).text();
+
     const sold = (html.match(/s-item__title/g) || []).length;
     if (sold >= 20) return 30;
     if (sold >= 10) return 15;
@@ -181,6 +199,10 @@ async function ebayBoost(query) {
 /* ================= MAIN ================= */
 async function run() {
   console.log("TCG bot scanning…");
+
+  for (const p of PRODUCTS) {
+    await learnPokemonCenterMSRP(p.name);
+  }
 
   for (const store of STORES) {
     try {
@@ -199,7 +221,8 @@ async function run() {
       if (!online && !instore) continue;
 
       const price = extractPrice(html);
-      const verdict = priceVerdict(MSRP[product.name], price);
+      const trueMSRP = learnedMSRP[product.name] || MSRP[product.name];
+      const verdict = priceVerdict(trueMSRP, price);
 
       if (verdict.label === "SCALPER") continue;
 
@@ -216,10 +239,15 @@ async function run() {
         instore ? `🏬 IN-STORE — ${product.name}` : `🔥 ONLINE — ${product.name}`,
         `**Store:** ${store.name}
 **Price:** $${price ?? "?"}
-**MSRP:** $${MSRP[product.name] ?? "?"}
+**MSRP:** $${trueMSRP ?? "?"}
 **Verdict:** ${verdict.label}
 **Confidence:** ${confidence}%`,
-        checkoutButtons(store.name, product.name, html, store.maxQty)
+        [{
+          type: 2,
+          style: 5,
+          label: `🛒 Checkout (x${store.maxQty})`,
+          url: cartIntentLink(store.name, product.name, html, store.maxQty)
+        }].filter(b => b.url)
       );
 
       setCooling(key);
