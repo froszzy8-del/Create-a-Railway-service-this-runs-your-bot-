@@ -25,43 +25,21 @@ const PRODUCTS = [
   { game: "onepiece", name: "One Piece Booster Box", tags: ["one piece", "booster box"], weight: 50 }
 ];
 
+/* ================= MSRP ================= */
+const MSRP = {
+  "Pokémon Booster Box": 161.64,
+  "Pokémon ETB": 49.99,
+  "Pokémon Collection": 29.99,
+  "One Piece Booster Box": 107.76
+};
+
 /* ================= STORES ================= */
 const STORES = [
-  {
-    name: "Target",
-    url: "https://www.target.com/s?searchTerm=pokemon+trading+cards",
-    pickupSignals: ["Pick up today", "Ready for pickup"],
-    score: 30,
-    maxQty: 5
-  },
-  {
-    name: "Walmart",
-    url: "https://www.walmart.com/search?q=pokemon+trading+cards",
-    pickupSignals: ["Pickup today"],
-    score: 25,
-    maxQty: 12
-  },
-  {
-    name: "Best Buy",
-    url: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+trading+cards",
-    pickupSignals: ["Pickup Today"],
-    score: 15,
-    maxQty: 2
-  },
-  {
-    name: "Barnes & Noble",
-    url: "https://www.barnesandnoble.com/s/pokemon%20trading%20cards",
-    pickupSignals: ["Available for Pickup"],
-    score: 10,
-    maxQty: 2
-  },
-  {
-    name: "Costco",
-    url: "https://www.costco.com/CatalogSearch?keyword=pokemon",
-    pickupSignals: [],
-    score: 8,
-    maxQty: 1
-  }
+  { name: "Target", url: "https://www.target.com/s?searchTerm=pokemon+trading+cards", pickupSignals: ["Pick up today", "Ready for pickup"], score: 30, maxQty: 5 },
+  { name: "Walmart", url: "https://www.walmart.com/search?q=pokemon+trading+cards", pickupSignals: ["Pickup today"], score: 25, maxQty: 12 },
+  { name: "Best Buy", url: "https://www.bestbuy.com/site/searchpage.jsp?st=pokemon+trading+cards", pickupSignals: ["Pickup Today"], score: 15, maxQty: 2 },
+  { name: "Barnes & Noble", url: "https://www.barnesandnoble.com/s/pokemon%20trading%20cards", pickupSignals: ["Available for Pickup"], score: 10, maxQty: 2 },
+  { name: "Costco", url: "https://www.costco.com/CatalogSearch?keyword=pokemon", pickupSignals: [], score: 8, maxQty: 1 }
 ];
 
 /* ================= MEMORY ================= */
@@ -82,6 +60,23 @@ function setCooling(key) {
   cooldown.set(key, Date.now());
 }
 
+/* ================= PRICE EXTRACTION ================= */
+function extractPrice(html) {
+  const match = html.match(/\$([0-9]+(?:\.[0-9]{2})?)/);
+  return match ? parseFloat(match[1]) : null;
+}
+
+/* ================= MSRP VERDICT ================= */
+function priceVerdict(msrp, price) {
+  if (!msrp || !price) return { label: "UNKNOWN", score: 0 };
+
+  const ratio = price / msrp;
+
+  if (ratio <= 1.05) return { label: "MSRP", score: 25 };
+  if (ratio <= 1.20) return { label: "MARKUP", score: 5 };
+  return { label: "SCALPER", score: -40 };
+}
+
 /* ================= SKU SNIFFING ================= */
 function extractTargetTCIN(html) {
   const match = html.match(/"tcin":"(\d{8})"/);
@@ -93,7 +88,7 @@ function extractWalmartOfferId(html) {
   return match ? match[1] : null;
 }
 
-/* ================= STORE-SPECIFIC LINKS ================= */
+/* ================= STORE LINKS ================= */
 function buildTargetLinks(tcin, qty) {
   return {
     product: `https://www.target.com/p/-/A-${tcin}`,
@@ -108,16 +103,16 @@ function buildWalmartLinks(offerId, qty) {
   };
 }
 
-/* ================= BEST BUY ZIP ACCURACY ================= */
+/* ================= BEST BUY ================= */
 function bestBuyInStoreAccurate(html) {
   return /ready for pickup/i.test(html) && /store pickup/i.test(html);
 }
 
 /* ================= CONFIDENCE ================= */
-function leakConfidence({ ebay, instore, weight, storeScore }) {
-  let score = weight + storeScore + ebay;
+function leakConfidence({ ebay, instore, weight, storeScore, priceScore }) {
+  let score = weight + storeScore + ebay + priceScore;
   if (instore) score += 25;
-  return Math.min(95, score);
+  return Math.max(0, Math.min(95, score));
 }
 
 /* ================= CART INTENT ================= */
@@ -144,24 +139,9 @@ function checkoutButtons(store, productName, html, maxQty) {
   const cart = cartIntentLink(store, productName, html, maxQty);
 
   return [
-    cart && {
-      type: 2,
-      style: 5,
-      label: `🛒 Checkout (x${maxQty})`,
-      url: cart
-    },
-    {
-      type: 2,
-      style: 5,
-      label: "🔍 Store Page",
-      url: STORES.find(s => s.name === store)?.url
-    },
-    {
-      type: 2,
-      style: 5,
-      label: "🔎 Backup Search",
-      url: `https://www.google.com/search?q=${encodeURIComponent(productName + " " + store)}`
-    }
+    cart && { type: 2, style: 5, label: `🛒 Checkout (x${maxQty})`, url: cart },
+    { type: 2, style: 5, label: "🔍 Store Page", url: STORES.find(s => s.name === store)?.url },
+    { type: 2, style: 5, label: "🔎 Backup Search", url: `https://www.google.com/search?q=${encodeURIComponent(productName + " " + store)}` }
   ].filter(Boolean);
 }
 
@@ -172,7 +152,7 @@ async function sendDiscord(title, desc, buttons = []) {
       title,
       description: desc,
       color: 5793266,
-      footer: { text: "TCG Bot • Railway" },
+      footer: { text: "TCG Bot • MSRP Guard • Railway" },
       timestamp: new Date()
     }],
     components: buttons.length ? [{ type: 1, components: buttons }] : []
@@ -188,10 +168,7 @@ async function sendDiscord(title, desc, buttons = []) {
 /* ================= EBAY DEMAND ================= */
 async function ebayBoost(query) {
   try {
-    const html = await (await fetch(
-      `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(query)}&LH_Sold=1`
-    )).text();
-
+    const html = await (await fetch(`https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(query)}&LH_Sold=1`)).text();
     const sold = (html.match(/s-item__title/g) || []).length;
     if (sold >= 20) return 30;
     if (sold >= 10) return 15;
@@ -215,24 +192,33 @@ async function run() {
       if (isCooling(key)) continue;
 
       const online = /add to cart|ship it/i.test(html);
-      const instore =
-        store.name === "Best Buy"
-          ? bestBuyInStoreAccurate(html)
-          : store.pickupSignals.some(s => html.includes(s));
+      const instore = store.name === "Best Buy"
+        ? bestBuyInStoreAccurate(html)
+        : store.pickupSignals.some(s => html.includes(s));
 
       if (!online && !instore) continue;
+
+      const price = extractPrice(html);
+      const verdict = priceVerdict(MSRP[product.name], price);
+
+      if (verdict.label === "SCALPER") continue;
 
       const ebay = await ebayBoost(product.name);
       const confidence = leakConfidence({
         ebay,
         instore,
         weight: product.weight,
-        storeScore: store.score
+        storeScore: store.score,
+        priceScore: verdict.score
       });
 
       await sendDiscord(
         instore ? `🏬 IN-STORE — ${product.name}` : `🔥 ONLINE — ${product.name}`,
-        `**Store:** ${store.name}\n**Confidence:** ${confidence}%`,
+        `**Store:** ${store.name}
+**Price:** $${price ?? "?"}
+**MSRP:** $${MSRP[product.name] ?? "?"}
+**Verdict:** ${verdict.label}
+**Confidence:** ${confidence}%`,
         checkoutButtons(store.name, product.name, html, store.maxQty)
       );
 
